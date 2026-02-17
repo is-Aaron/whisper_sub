@@ -1,5 +1,5 @@
 """
-Video Cut GUI — 视频字幕生成器图形界面
+WhisperSub GUI — 视频字幕生成器图形界面
 
 跨平台桌面应用 (macOS / Windows)，支持：
   - 批量添加视频/音频文件或整个文件夹
@@ -185,7 +185,7 @@ class App:
 
     def __init__(self) -> None:
         self.root = tk.Tk()
-        self.root.title("Video Cut — 视频字幕生成器")
+        self.root.title("WhisperSub — 视频字幕生成器")
         self.root.geometry("960x720")
         self.root.minsize(760, 520)
 

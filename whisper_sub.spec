@@ -1,14 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec file for Video Cut GUI application.
+PyInstaller spec file for WhisperSub GUI application.
 
 Usage:
-    macOS:   pyinstaller video_cut.spec
-    Windows: pyinstaller video_cut.spec
+    macOS:   pyinstaller whisper_sub.spec
+    Windows: pyinstaller whisper_sub.spec
 
 Output:
-    macOS:   dist/Video Cut.app
-    Windows: dist/Video Cut/Video Cut.exe
+    macOS:   dist/WhisperSub.app
+    Windows: dist/WhisperSub/WhisperSub.exe
 """
 
 import sys
@@ -75,7 +75,7 @@ if sys.platform == "darwin":
         a.scripts,
         [],
         exclude_binaries=True,
-        name="Video Cut",
+        name="WhisperSub",
         debug=False,
         strip=False,
         upx=True,
@@ -88,16 +88,16 @@ if sys.platform == "darwin":
         a.datas,
         strip=False,
         upx=True,
-        name="Video Cut",
+        name="WhisperSub",
     )
     app = BUNDLE(
         coll,
-        name="Video Cut.app",
+        name="WhisperSub.app",
         icon="icon.icns",
-        bundle_identifier="com.videocut.app",
+        bundle_identifier="com.whispersub.app",
         info_plist={
             "CFBundleShortVersionString": "0.1.0",
-            "CFBundleDisplayName": "Video Cut",
+            "CFBundleDisplayName": "WhisperSub",
             "NSHighResolutionCapable": True,
         },
     )
@@ -108,7 +108,7 @@ else:
         a.scripts,
         [],
         exclude_binaries=True,
-        name="Video Cut",
+        name="WhisperSub",
         debug=False,
         strip=False,
         upx=True,
@@ -122,5 +122,5 @@ else:
         a.datas,
         strip=False,
         upx=True,
-        name="Video Cut",
+        name="WhisperSub",
     )

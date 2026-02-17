@@ -1,5 +1,5 @@
 """
-video_cut - 从视频生成 SRT 字幕文件
+WhisperSub - 从视频生成 SRT 字幕文件
 
 使用 faster-whisper 进行语音识别，支持多语言，自动生成带时间戳的 SRT 字幕。
 

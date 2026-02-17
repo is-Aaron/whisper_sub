@@ -1,8 +1,8 @@
 """
-生成 Video Cut 应用图标。
+生成 WhisperSub 应用图标。
 
-设计: 蓝色圆角方形背景 + 白色播放三角 + 两行字幕线条,
-传达 "视频 → 字幕" 的核心功能。
+设计: 深蓝渐变圆角方形背景 + 声波弧线 + 字幕线条,
+传达 "语音识别 (Whisper) → 字幕 (Sub)" 的核心功能。
 
 用法:
     uv run --with pillow generate_icon.py
@@ -13,6 +13,7 @@
     icon.icns — 多尺寸 ICNS   (macOS .app 应用图标, 仅 macOS 可生成)
 """
 
+import math
 import shutil
 import subprocess
 import sys
@@ -27,46 +28,58 @@ def create_icon(size: int = 512) -> Image.Image:
     draw = ImageDraw.Draw(img)
     s = size
 
-    # ── 背景: 蓝色圆角方形 ──
+    # ── 背景: 深蓝色圆角方形 ──
     pad = round(s * 0.04)
     radius = round(s * 0.18)
     draw.rounded_rectangle(
         [(pad, pad), (s - pad, s - pad)],
         radius=radius,
-        fill="#1565C0",
+        fill="#0D47A1",
     )
 
-    # ── 播放按钮: 白色三角形 (▶) ──
-    # 质心居中，视觉上偏右一点以平衡三角形的不对称感
-    cx = s * 0.52
-    cy = s * 0.37
-    w = s * 0.28
-    h = s * 0.18
-    draw.polygon(
-        [
-            (cx - w / 3, cy - h),
-            (cx - w / 3, cy + h),
-            (cx + w * 2 / 3, cy),
-        ],
+    # ── 声波弧线 (代表 Whisper 语音识别) ──
+    cx = s * 0.38
+    cy = s * 0.38
+    arc_configs = [
+        (s * 0.13, max(round(s * 0.045), 2), "#FFFFFF"),
+        (s * 0.24, max(round(s * 0.040), 2), "rgba(255,255,255,220)"),
+        (s * 0.35, max(round(s * 0.035), 2), "rgba(255,255,255,180)"),
+    ]
+    for arc_r, arc_w, color in arc_configs:
+        bbox = [cx - arc_r, cy - arc_r, cx + arc_r, cy + arc_r]
+        draw.arc(bbox, start=-50, end=50, fill=color, width=arc_w)
+
+    # ── 中心圆点 (声源) ──
+    dot_r = round(s * 0.045)
+    draw.ellipse(
+        [cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r],
         fill="white",
     )
 
-    # ── 字幕线条 ──
-    line_h = max(round(s * 0.04), 2)
-    line_r = max(round(s * 0.02), 1)
+    # ── 字幕线条 (代表 Sub 字幕输出) ──
+    line_h = max(round(s * 0.042), 2)
+    line_r = max(round(s * 0.021), 1)
 
     # 第一行: 宽，白色
-    y1 = round(s * 0.64)
+    y1 = round(s * 0.62)
     draw.rounded_rectangle(
-        [(round(s * 0.16), y1), (round(s * 0.84), y1 + line_h)],
+        [(round(s * 0.14), y1), (round(s * 0.86), y1 + line_h)],
         radius=line_r,
         fill="white",
     )
 
-    # 第二行: 窄，浅蓝
-    y2 = round(s * 0.73)
+    # 第二行: 中等宽度，浅蓝
+    y2 = round(s * 0.71)
     draw.rounded_rectangle(
-        [(round(s * 0.24), y2), (round(s * 0.76), y2 + line_h)],
+        [(round(s * 0.20), y2), (round(s * 0.80), y2 + line_h)],
+        radius=line_r,
+        fill="#64B5F6",
+    )
+
+    # 第三行: 窄，更浅蓝 (渐隐效果)
+    y3 = round(s * 0.80)
+    draw.rounded_rectangle(
+        [(round(s * 0.28), y3), (round(s * 0.72), y3 + line_h)],
         radius=line_r,
         fill="#90CAF9",
     )

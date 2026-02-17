@@ -1,4 +1,4 @@
-# Video Cut — 视频字幕生成器
+# WhisperSub — 视频字幕生成器
 
 从视频/音频文件自动生成 SRT 字幕，基于 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 语音识别引擎。
 
@@ -81,18 +81,18 @@ uv sync --extra build
 ### macOS 打包 (.app)
 
 ```bash
-uv run pyinstaller video_cut.spec
+uv run pyinstaller whisper_sub.spec
 ```
 
-打包完成后，应用位于 `dist/Video Cut.app`，可直接双击运行或拖入「应用程序」文件夹。
+打包完成后，应用位于 `dist/WhisperSub.app`，可直接双击运行或拖入「应用程序」文件夹。
 
 ### Windows 打包 (.exe)
 
 ```bash
-uv run pyinstaller video_cut.spec
+uv run pyinstaller whisper_sub.spec
 ```
 
-打包完成后，应用位于 `dist/Video Cut/Video Cut.exe`，可将整个 `Video Cut` 文件夹分发给用户。
+打包完成后，应用位于 `dist/WhisperSub/WhisperSub.exe`，可将整个 `WhisperSub` 文件夹分发给用户。
 
 > **注意**: 打包必须在目标平台上执行 — macOS 上打包生成 `.app`，Windows 上打包生成 `.exe`，不能交叉编译。
 

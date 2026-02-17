@@ -1,5 +1,5 @@
 [project]
-name = "video-cut"
+name = "whisper-sub"
 version = "0.1.0"
 description = "从视频/音频文件生成 SRT 字幕 (CLI + GUI)"
 readme = "README.md"
@@ -13,8 +13,8 @@ icon = ["pillow"]
 build = ["pyinstaller"]
 
 [project.scripts]
-video-cut = "main:main"
-video-cut-gui = "gui:main"
+whisper-sub = "main:main"
+whisper-sub-gui = "gui:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
