@@ -1,0 +1,24 @@
+[project]
+name = "video-cut"
+version = "0.1.0"
+description = "从视频/音频文件生成 SRT 字幕 (CLI + GUI)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "faster-whisper",
+]
+
+[project.optional-dependencies]
+icon = ["pillow"]
+build = ["pyinstaller"]
+
+[project.scripts]
+video-cut = "main:main"
+video-cut-gui = "gui:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["main", "gui"]
