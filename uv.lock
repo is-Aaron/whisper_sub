@@ -751,7 +751,7 @@ icon = [
 
 [package.metadata]
 requires-dist = [
-    { name = "faster-whisper" },
+    { name = "faster-whisper", specifier = ">=1.0,<2" },
     { name = "pillow", marker = "extra == 'icon'" },
     { name = "pyinstaller", marker = "extra == 'build'" },
 ]

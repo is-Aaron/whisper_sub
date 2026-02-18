@@ -23,7 +23,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from faster_whisper import BatchedInferencePipeline, WhisperModel
 
-from main import format_duration, generate_srt
+from main import format_duration, generate_srt, split_segments_by_sentence
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -31,6 +31,7 @@ from main import format_duration, generate_srt
 
 MODEL_SIZES = ["tiny", "base", "small", "medium", "large-v3"]
 DEVICES = ["auto", "cpu", "cuda"]
+COMPUTE_TYPES = ["auto", "int8", "int8_float16", "float16", "float32"]
 
 LANGUAGES: list[tuple[str, str | None]] = [
     ("自动检测", None),
@@ -71,20 +72,26 @@ ST_CANCEL = "已取消"
 # ---------------------------------------------------------------------------
 
 _thread_local = threading.local()
+# Serialise model downloads so concurrent threads don't race to download the
+# same weights simultaneously (which can corrupt the cache).
+_model_download_lock = threading.Lock()
 
 
 def _get_or_load_model(
-    model_id: str, device: str
+    model_id: str, device: str, compute_type: str
 ) -> BatchedInferencePipeline:
     """Return a BatchedInferencePipeline cached per-thread.
 
     Each thread in the ThreadPoolExecutor keeps its own model instance so that
     truly concurrent transcription is possible when concurrency > 1.
     When the model settings change, the old instance is replaced.
+    Model creation (including download) is serialised across threads to prevent
+    concurrent download races that can corrupt the HuggingFace cache.
     """
-    key = f"{model_id}|{device}"
+    key = f"{model_id}|{device}|{compute_type}"
     if getattr(_thread_local, "model_key", None) != key:
-        model = WhisperModel(model_id, device=device, compute_type="int8")
+        with _model_download_lock:
+            model = WhisperModel(model_id, device=device, compute_type=compute_type)
         _thread_local.pipeline = BatchedInferencePipeline(model=model)
         _thread_local.model_key = key
     return _thread_local.pipeline
@@ -101,6 +108,7 @@ def _worker(
     output_path: str,
     model_id: str,
     device: str,
+    compute_type: str,
     language: str | None,
     beam_size: int,
     batch_size: int,
@@ -120,7 +128,7 @@ def _worker(
 
         # --- Load model (may be cached in this thread) ---
         _send("status", value=ST_LOADING)
-        pipeline = _get_or_load_model(model_id, device)
+        pipeline = _get_or_load_model(model_id, device, compute_type)
 
         if cancel_event.is_set():
             _send("status", value=ST_CANCEL)
@@ -134,6 +142,7 @@ def _worker(
             beam_size=beam_size,
             language=language,
             vad_filter=use_vad,
+            word_timestamps=True,
         )
 
         _send(
@@ -159,15 +168,30 @@ def _worker(
             _send("status", value=ST_DONE, detail="未识别到语音内容")
             return
 
-        # --- Write SRT ---
-        srt_content = generate_srt(collected)
+        # --- Split & Write SRT ---
+        has_words = sum(1 for s in collected if getattr(s, "words", None))
+        _send(
+            "log",
+            text=(
+                f"原始 {len(collected)} 段, "
+                f"其中 {has_words} 段含词级时间戳, "
+                "开始按句切分..."
+            ),
+        )
+
+        sub_segments = split_segments_by_sentence(collected)
+        srt_content = generate_srt(sub_segments)
         Path(output_path).write_text(srt_content, encoding="utf-8")
 
         total_speech = collected[-1].end - collected[0].start
         _send(
             "status",
             value=ST_DONE,
-            detail=f"{len(collected)} 条字幕, 覆盖 {format_duration(total_speech)}",
+            detail=(
+                f"{len(sub_segments)} 条字幕 "
+                f"(原始 {len(collected)} 段 → 切分后 {len(sub_segments)} 条), "
+                f"覆盖 {format_duration(total_speech)}"
+            ),
         )
 
     except Exception as exc:
@@ -201,6 +225,7 @@ class App:
         self.var_model = tk.StringVar(value="small")
         self.var_model_path = tk.StringVar()
         self.var_device = tk.StringVar(value="auto")
+        self.var_compute_type = tk.StringVar(value="auto")
         self.var_language = tk.StringVar(value="自动检测")
         self.var_beam_size = tk.IntVar(value=5)
         self.var_batch_size = tk.IntVar(value=8)
@@ -267,6 +292,15 @@ class App:
             textvariable=self.var_device,
             values=DEVICES,
             width=7,
+            state="readonly",
+        ).pack(side=tk.LEFT, padx=(2, 14))
+
+        ttk.Label(row1, text="量化:").pack(side=tk.LEFT)
+        ttk.Combobox(
+            row1,
+            textvariable=self.var_compute_type,
+            values=COMPUTE_TYPES,
+            width=12,
             state="readonly",
         ).pack(side=tk.LEFT, padx=(2, 14))
 
@@ -379,6 +413,12 @@ class App:
         # --- Log area ---
         log_frame = ttk.LabelFrame(paned, text=" 日志 ", padding=4)
         paned.add(log_frame, weight=1)
+
+        log_toolbar = ttk.Frame(log_frame)
+        log_toolbar.pack(fill=tk.X, pady=(0, 2))
+        ttk.Button(
+            log_toolbar, text="清空日志", command=self._clear_log, width=8
+        ).pack(side=tk.RIGHT)
 
         self.log_text = tk.Text(
             log_frame, height=6, wrap=tk.WORD, state=tk.DISABLED
@@ -521,12 +561,13 @@ class App:
 
         model_id = self.var_model_path.get().strip() or self.var_model.get()
         device = self.var_device.get()
+        compute_type = self.var_compute_type.get()
         language = LANG_MAP.get(self.var_language.get())
         use_vad = self.var_vad.get()
 
         self._log(
             f"开始处理 {len(pending_ids)} 个任务 "
-            f"(并发={concurrency}, 模型={model_id}, 设备={device})"
+            f"(并发={concurrency}, 模型={model_id}, 设备={device}, 量化={compute_type})"
         )
         if concurrency > 1:
             self._log(
@@ -550,6 +591,7 @@ class App:
                 output_path=task["output"],
                 model_id=model_id,
                 device=device,
+                compute_type=compute_type,
                 language=language,
                 beam_size=beam_size,
                 batch_size=batch_size,
@@ -627,6 +669,9 @@ class App:
             elif status == ST_RUNNING:
                 self._update_row(task_id, tag="run")
 
+        elif kind == "log":
+            self._log(f"  {msg['text']} — {Path(task['input']).name}")
+
         elif kind == "progress":
             task["progress"] = msg["value"]
             task["count"] = msg["count"]
@@ -674,11 +719,22 @@ class App:
 
     # ── Logging ───────────────────────────────────────────────────────────
 
+    _MAX_LOG_LINES = 2000
+
     def _log(self, text: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.configure(state=tk.NORMAL)
         self.log_text.insert(tk.END, f"[{timestamp}] {text}\n")
+        # Trim oldest lines to keep memory usage bounded
+        line_count = int(self.log_text.index(tk.END).split(".")[0]) - 1
+        if line_count > self._MAX_LOG_LINES:
+            self.log_text.delete("1.0", f"{line_count - self._MAX_LOG_LINES}.0")
         self.log_text.see(tk.END)
+        self.log_text.configure(state=tk.DISABLED)
+
+    def _clear_log(self) -> None:
+        self.log_text.configure(state=tk.NORMAL)
+        self.log_text.delete("1.0", tk.END)
         self.log_text.configure(state=tk.DISABLED)
 
     # ── Window Lifecycle ──────────────────────────────────────────────────

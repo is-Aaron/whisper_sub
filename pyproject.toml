@@ -5,7 +5,7 @@ description = "从视频/音频文件生成 SRT 字幕 (CLI + GUI)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "faster-whisper",
+    "faster-whisper>=1.0,<2",
 ]
 
 [project.optional-dependencies]

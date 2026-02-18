@@ -10,11 +10,179 @@ WhisperSub - 从视频生成 SRT 字幕文件
 """
 
 import argparse
+import re
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from faster_whisper import BatchedInferencePipeline, WhisperModel
+
+# ---------------------------------------------------------------------------
+# 句子切分相关常量
+# ---------------------------------------------------------------------------
+
+# 句末标点 —— 遇到即切分
+_SENTENCE_END = frozenset("。！？.!?…")
+
+# 从句标点 —— 当已积累文本较长时作为备选切分点
+_CLAUSE_END = frozenset("，,、；;")
+
+# 在从句标点处切分的最小字符数阈值
+_MIN_CLAUSE_SPLIT_CHARS = 18
+
+# 单条字幕最大字符数 —— 超过后强制在最近的词边界切分
+_MAX_CHARS = 42
+
+# 用于 fallback 模式：按标点切分文本的正则
+_SPLIT_SENTENCE_RE = re.compile(r"(?<=[。！？.!?…])")
+_SPLIT_CLAUSE_RE = re.compile(r"(?<=[，,、；;：:])")
+
+
+@dataclass(frozen=True, slots=True)
+class SubSegment:
+    """切分后的字幕片段，与 faster-whisper Segment 具有相同的 start/end/text 接口"""
+
+    start: float
+    end: float
+    text: str
+
+
+# ---------------------------------------------------------------------------
+# 核心切分函数
+# ---------------------------------------------------------------------------
+
+
+def split_segments_by_sentence(segments: list) -> list[SubSegment]:
+    """在句子边界处切分字幕片段。
+
+    对每个 segment:
+      - 如果有词级时间戳 (.words)，使用精确的词时间戳来切分
+      - 如果没有词级时间戳，使用正则按标点切分文本，按字符比例估算时间戳
+
+    切分策略 (两种模式共用):
+      1. 遇到句末标点（。！？.!?…）立即切分
+      2. 当已积累文本超过阈值时，遇到逗号等从句标点也切分
+      3. 当已积累文本超过最大字符数时，在最近的词边界强制切分
+    """
+    result: list[SubSegment] = []
+
+    for segment in segments:
+        text = segment.text.strip()
+        if not text:
+            continue
+
+        words = getattr(segment, "words", None)
+        if words:
+            result.extend(_split_with_words(segment.start, segment.end, words))
+        else:
+            result.extend(_split_by_text(segment.start, segment.end, text))
+
+    return result
+
+
+def _split_with_words(
+    seg_start: float, seg_end: float, words: list
+) -> list[SubSegment]:
+    """使用词级时间戳精确切分。"""
+    result: list[SubSegment] = []
+    buf: list[str] = []
+    buf_start: float | None = None
+    buf_chars = 0
+
+    for word in words:
+        w = word.word
+        if buf_start is None:
+            buf_start = word.start
+        buf.append(w)
+        stripped = w.strip()
+        buf_chars += len(stripped)
+
+        if not stripped:
+            continue
+
+        last_char = stripped[-1]
+        should_split = (
+            last_char in _SENTENCE_END
+            or (last_char in _CLAUSE_END and buf_chars >= _MIN_CLAUSE_SPLIT_CHARS)
+            or buf_chars >= _MAX_CHARS
+        )
+
+        if should_split:
+            joined = "".join(buf).strip()
+            if joined:
+                result.append(SubSegment(start=buf_start, end=word.end, text=joined))
+            buf = []
+            buf_start = None
+            buf_chars = 0
+
+    if buf:
+        joined = "".join(buf).strip()
+        if joined:
+            assert buf_start is not None
+            end_time = words[-1].end if words else seg_end
+            result.append(SubSegment(start=buf_start, end=end_time, text=joined))
+
+    return result
+
+
+def _split_by_text(
+    seg_start: float, seg_end: float, text: str
+) -> list[SubSegment]:
+    """无词级时间戳时的 fallback：按标点正则切分，按字符比例估算时间戳。"""
+    parts = _split_text_into_parts(text)
+
+    # 对超过最大字符数的片段按字符边界强制切分
+    capped: list[str] = []
+    for part in parts:
+        while len(part) > _MAX_CHARS:
+            capped.append(part[:_MAX_CHARS])
+            part = part[_MAX_CHARS:]
+        if part:
+            capped.append(part)
+    parts = capped
+
+    if len(parts) <= 1:
+        return [SubSegment(start=seg_start, end=seg_end, text=text)]
+
+    total_chars = sum(len(p) for p in parts)
+    if total_chars == 0:
+        return [SubSegment(start=seg_start, end=seg_end, text=text)]
+
+    duration = seg_end - seg_start
+    result: list[SubSegment] = []
+    current_time = seg_start
+
+    for part in parts:
+        part_duration = (len(part) / total_chars) * duration
+        result.append(
+            SubSegment(
+                start=round(current_time, 3),
+                end=round(current_time + part_duration, 3),
+                text=part,
+            )
+        )
+        current_time += part_duration
+
+    return result
+
+
+def _split_text_into_parts(text: str) -> list[str]:
+    """将文本按标点切分成多个片段。
+
+    优先在句末标点处切分，如果片段仍然太长，再在从句标点处切分。
+    """
+    parts = [p.strip() for p in _SPLIT_SENTENCE_RE.split(text) if p.strip()]
+
+    refined: list[str] = []
+    for part in parts:
+        if len(part) >= _MIN_CLAUSE_SPLIT_CHARS:
+            sub = [s.strip() for s in _SPLIT_CLAUSE_RE.split(part) if s.strip()]
+            refined.extend(sub)
+        else:
+            refined.append(part)
+
+    return refined if len(refined) > 1 else [text]
 
 
 def format_timestamp(seconds: float) -> str:
@@ -134,6 +302,12 @@ def main() -> None:
         help="运行设备: auto/cpu/cuda (默认: auto)",
     )
     parser.add_argument(
+        "--compute-type",
+        default="auto",
+        choices=["auto", "int8", "int8_float16", "float16", "float32"],
+        help="量化精度: auto/int8/int8_float16/float16/float32 (默认: auto)",
+    )
+    parser.add_argument(
         "--beam-size",
         type=int,
         default=5,
@@ -187,14 +361,14 @@ def main() -> None:
     print(f"输出文件: {output_path}")
     print(f"模型: {args.model}")
     print(f"设备: {args.device}")
-    print(f"量化: int8 (加速模式)")
+    print(f"量化: {args.compute_type}")
     print(f"批量大小: {args.batch_size}")
     print(f"VAD 过滤: {'开启' if use_vad else '关闭'}")
     print()
 
     try:
         print("正在加载模型 (首次运行需下载，请耐心等待)...")
-        model = WhisperModel(args.model, device=args.device, compute_type="int8")
+        model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
         batched_model = BatchedInferencePipeline(model=model)
         print("模型加载完成")
     except Exception as e:
@@ -212,6 +386,7 @@ def main() -> None:
             beam_size=args.beam_size,
             language=args.language,
             vad_filter=use_vad,
+            word_timestamps=True,
         )
 
         print(f"检测到语言: {info.language} (置信度: {info.language_probability:.2%})")
@@ -229,12 +404,17 @@ def main() -> None:
         sys.exit(0)
 
     print()
-    srt_content = generate_srt(segment_list)
+    sub_segments = split_segments_by_sentence(segment_list)
+    srt_content = generate_srt(sub_segments)
 
     output_path.write_text(srt_content, encoding="utf-8")
 
     total_time = segment_list[-1].end - segment_list[0].start
-    print(f"字幕生成完成! 共 {len(segment_list)} 条字幕，覆盖 {format_duration(total_time)} 语音内容")
+    print(
+        f"字幕生成完成! 共 {len(sub_segments)} 条字幕 "
+        f"(原始 {len(segment_list)} 段, 按句切分后 {len(sub_segments)} 条), "
+        f"覆盖 {format_duration(total_time)} 语音内容"
+    )
     print(f"已保存到: {output_path}")
 
 
